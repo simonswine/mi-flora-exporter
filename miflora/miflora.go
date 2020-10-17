@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-kit/kit/log"
+	"github.com/go-kit/kit/log/level"
 
 	bluetooth "github.com/muka/go-bluetooth/api"
 	"github.com/muka/go-bluetooth/bluez/profile/adapter"
@@ -16,10 +17,41 @@ import (
 )
 
 const (
-	uuidFirmwareBattery = "00001a02-0000-1000-8000-00805f9b34fb"
-	uuidDataRead        = "00001a01-0000-1000-8000-00805f9b34fb"
-	uuidModeChange      = "00001a00-0000-1000-8000-00805f9b34fb"
+	uuidFirmwareBattery = "00001a02-0000-1000-8000-00805f9b34fb" // handle 0x38
+	uuidDataRead        = "00001a01-0000-1000-8000-00805f9b34fb" // handle 0x35
+	uuidModeChange      = "00001a00-0000-1000-8000-00805f9b34fb" // handle 0x33
+	uuidDeviceTime      = "00001a12-0000-1000-8000-00805f9b34fb" // handle 0x41
+	uuidHistoryControl  = "00001a10-0000-1000-8000-00805f9b34fb" // handle 0x3e
+	uuidHistoryRead     = "00001a11-0000-1000-8000-00805f9b34fb" // handle 0x3c
 )
+
+/*
+handle = 0x0002, char properties = 0x02, char value handle = 0x0003, uuid = 00002a00-0000-1000-8000-00805f9b34fb
+handle = 0x0004, char properties = 0x02, char value handle = 0x0005, uuid = 00002a01-0000-1000-8000-00805f9b34fb
+handle = 0x0006, char properties = 0x0a, char value handle = 0x0007, uuid = 00002a02-0000-1000-8000-00805f9b34fb
+handle = 0x0008, char properties = 0x02, char value handle = 0x0009, uuid = 00002a04-0000-1000-8000-00805f9b34fb
+handle = 0x000d, char properties = 0x22, char value handle = 0x000e, uuid = 00002a05-0000-1000-8000-00805f9b34fb
+handle = 0x0011, char properties = 0x18, char value handle = 0x0012, uuid = 00000001-0000-1000-8000-00805f9b34fb
+handle = 0x0014, char properties = 0x02, char value handle = 0x0015, uuid = 00000002-0000-1000-8000-00805f9b34fb
+handle = 0x0016, char properties = 0x12, char value handle = 0x0017, uuid = 00000004-0000-1000-8000-00805f9b34fb
+handle = 0x0018, char properties = 0x08, char value handle = 0x0019, uuid = 00000007-0000-1000-8000-00805f9b34fb
+handle = 0x001a, char properties = 0x08, char value handle = 0x001b, uuid = 00000010-0000-1000-8000-00805f9b34fb
+handle = 0x001c, char properties = 0x0a, char value handle = 0x001d, uuid = 00000013-0000-1000-8000-00805f9b34fb
+handle = 0x001e, char properties = 0x02, char value handle = 0x001f, uuid = 00000014-0000-1000-8000-00805f9b34fb
+handle = 0x0020, char properties = 0x10, char value handle = 0x0021, uuid = 00001001-0000-1000-8000-00805f9b34fb
+handle = 0x0024, char properties = 0x0a, char value handle = 0x0025, uuid = 8082caa8-41a6-4021-91c6-56f9b954cc34
+handle = 0x0026, char properties = 0x0a, char value handle = 0x0027, uuid = 724249f0-5ec3-4b5f-8804-42345af08651
+handle = 0x0028, char properties = 0x02, char value handle = 0x0029, uuid = 6c53db25-47a1-45fe-a022-7c92fb334fd4
+handle = 0x002a, char properties = 0x0a, char value handle = 0x002b, uuid = 9d84b9a3-000c-49d8-9183-855b673fda31
+handle = 0x002c, char properties = 0x0e, char value handle = 0x002d, uuid = 457871e8-d516-4ca1-9116-57d0b17b9cb2
+handle = 0x002e, char properties = 0x12, char value handle = 0x002f, uuid = 5f78df94-798c-46f5-990a-b3eb6a065c88
+handle = 0x0032, char properties = 0x0a, char value handle = 0x0033, uuid = 00001a00-0000-1000-8000-00805f9b34fb
+handle = 0x0034, char properties = 0x1a, char value handle = 0x0035, uuid = 00001a01-0000-1000-8000-00805f9b34fb
+handle = 0x0037, char properties = 0x02, char value handle = 0x0038, uuid = 00001a02-0000-1000-8000-00805f9b34fb
+handle = 0x003b, char properties = 0x02, char value handle = 0x003c, uuid = 00001a11-0000-1000-8000-00805f9b34fb
+handle = 0x003d, char properties = 0x1a, char value handle = 0x003e, uuid = 00001a10-0000-1000-8000-00805f9b34fb
+handle = 0x0040, char properties = 0x02, char value handle = 0x0041, uuid = 00001a12-0000-1000-8000-00805f9b34fb
+*/
 
 var (
 	modeBlinkLED           = []byte{0xfd, 0xff}
@@ -96,7 +128,6 @@ func (f *Firmware) UnmarshalBinary(data []byte) error {
 }
 
 func (s *Sensor) Start(stopCh chan struct{}) error {
-
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -111,29 +142,38 @@ query:
 				continue
 			}
 
-			f, err := s.Firmware()
+			_, err := s.History()
 			if err != nil {
-				s.logger.Log("msg", "getting firmware failed", "err", err)
+				s.logger.Log("msg", "getting history failed", "err", err)
 				continue
 			}
-			s.logger.Log(
-				"msg", "firmware detected",
-				"version", f.Version,
-				"battery", f.Battery,
-			)
 
-			m, err := s.Measurement()
-			if err != nil {
-				s.logger.Log("msg", "getting measurement failed", "err", err)
-				continue
-			}
-			s.logger.Log(
-				"msg", "measurement successful",
-				"temperature", m.Temperature,
-				"light", m.Light,
-				"moisture", m.Moisture,
-				"conductivity", m.Conductivity,
-			)
+			/*
+
+				f, err := s.Firmware()
+				if err != nil {
+					s.logger.Log("msg", "getting firmware failed", "err", err)
+					continue
+				}
+				s.logger.Log(
+					"msg", "firmware detected",
+					"version", f.Version,
+					"battery", f.Battery,
+				)
+
+				m, err := s.Measurement()
+				if err != nil {
+					s.logger.Log("msg", "getting measurement failed", "err", err)
+					continue
+				}
+				s.logger.Log(
+					"msg", "measurement successful",
+					"temperature", m.Temperature,
+					"light", m.Light,
+					"moisture", m.Moisture,
+					"conductivity", m.Conductivity,
+				)
+			*/
 
 			if err := s.device.Disconnect(); err != nil {
 				s.logger.Log("msg", "disconnect failed", "err", err)
@@ -163,6 +203,35 @@ func (s *Sensor) Firmware() (*Firmware, error) {
 	}
 
 	return firmware, nil
+}
+
+func (s *Sensor) History() (*string, error) {
+	charMode, err := s.device.GetCharByUUID(uuidHistoryControl)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := charMode.WriteValue(modeHistoryReadInit, map[string]interface{}{}); err != nil {
+		return nil, err
+	}
+
+	charData, err := s.device.GetCharByUUID(uuidHistoryRead)
+	if err != nil {
+		return nil, err
+	}
+
+	dataHistory, err := charData.ReadValue(map[string]interface{}{})
+	if err != nil {
+		return nil, err
+	}
+
+	var historyLength int16
+	if err := binary.Read(bytes.NewReader(dataHistory), binary.LittleEndian, &historyLength); err != nil {
+		return nil, fmt.Errorf("error reading history length: %s", err)
+	}
+	level.Info(s.logger).Log("msg", "read history header", "length", historyLength, "header", fmt.Sprintf("%x", dataHistory[2:]))
+
+	return nil, nil //fmt.Errorf("not implemented: %s", "history")
 }
 
 func (s *Sensor) Measurement() (*Measurement, error) {
