@@ -1,57 +1,31 @@
 package miflora
 
 import (
-	"bytes"
+	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/go-ble/ble"
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 
-	bluetooth "github.com/muka/go-bluetooth/api"
-	"github.com/muka/go-bluetooth/bluez/profile/adapter"
-	"github.com/muka/go-bluetooth/bluez/profile/device"
+	"github.com/simonswine/mi-flora-remote-write/miflora/model"
 )
 
 const (
-	uuidFirmwareBattery = "00001a02-0000-1000-8000-00805f9b34fb" // handle 0x38
-	uuidDataRead        = "00001a01-0000-1000-8000-00805f9b34fb" // handle 0x35
-	uuidModeChange      = "00001a00-0000-1000-8000-00805f9b34fb" // handle 0x33
-	uuidDeviceTime      = "00001a12-0000-1000-8000-00805f9b34fb" // handle 0x41
-	uuidHistoryControl  = "00001a10-0000-1000-8000-00805f9b34fb" // handle 0x3e
-	uuidHistoryRead     = "00001a11-0000-1000-8000-00805f9b34fb" // handle 0x3c
+	handleFirmwareBattery = uint16(0x38)
+	handleDataRead        = uint16(0x35)
+	handleModeChange      = uint16(0x33)
+	handleDeviceTime      = uint16(0x41)
+	handleHistoryControl  = uint16(0x3e)
+	handleHistoryRead     = uint16(0x3c)
 )
-
-/*
-handle = 0x0002, char properties = 0x02, char value handle = 0x0003, uuid = 00002a00-0000-1000-8000-00805f9b34fb
-handle = 0x0004, char properties = 0x02, char value handle = 0x0005, uuid = 00002a01-0000-1000-8000-00805f9b34fb
-handle = 0x0006, char properties = 0x0a, char value handle = 0x0007, uuid = 00002a02-0000-1000-8000-00805f9b34fb
-handle = 0x0008, char properties = 0x02, char value handle = 0x0009, uuid = 00002a04-0000-1000-8000-00805f9b34fb
-handle = 0x000d, char properties = 0x22, char value handle = 0x000e, uuid = 00002a05-0000-1000-8000-00805f9b34fb
-handle = 0x0011, char properties = 0x18, char value handle = 0x0012, uuid = 00000001-0000-1000-8000-00805f9b34fb
-handle = 0x0014, char properties = 0x02, char value handle = 0x0015, uuid = 00000002-0000-1000-8000-00805f9b34fb
-handle = 0x0016, char properties = 0x12, char value handle = 0x0017, uuid = 00000004-0000-1000-8000-00805f9b34fb
-handle = 0x0018, char properties = 0x08, char value handle = 0x0019, uuid = 00000007-0000-1000-8000-00805f9b34fb
-handle = 0x001a, char properties = 0x08, char value handle = 0x001b, uuid = 00000010-0000-1000-8000-00805f9b34fb
-handle = 0x001c, char properties = 0x0a, char value handle = 0x001d, uuid = 00000013-0000-1000-8000-00805f9b34fb
-handle = 0x001e, char properties = 0x02, char value handle = 0x001f, uuid = 00000014-0000-1000-8000-00805f9b34fb
-handle = 0x0020, char properties = 0x10, char value handle = 0x0021, uuid = 00001001-0000-1000-8000-00805f9b34fb
-handle = 0x0024, char properties = 0x0a, char value handle = 0x0025, uuid = 8082caa8-41a6-4021-91c6-56f9b954cc34
-handle = 0x0026, char properties = 0x0a, char value handle = 0x0027, uuid = 724249f0-5ec3-4b5f-8804-42345af08651
-handle = 0x0028, char properties = 0x02, char value handle = 0x0029, uuid = 6c53db25-47a1-45fe-a022-7c92fb334fd4
-handle = 0x002a, char properties = 0x0a, char value handle = 0x002b, uuid = 9d84b9a3-000c-49d8-9183-855b673fda31
-handle = 0x002c, char properties = 0x0e, char value handle = 0x002d, uuid = 457871e8-d516-4ca1-9116-57d0b17b9cb2
-handle = 0x002e, char properties = 0x12, char value handle = 0x002f, uuid = 5f78df94-798c-46f5-990a-b3eb6a065c88
-handle = 0x0032, char properties = 0x0a, char value handle = 0x0033, uuid = 00001a00-0000-1000-8000-00805f9b34fb
-handle = 0x0034, char properties = 0x1a, char value handle = 0x0035, uuid = 00001a01-0000-1000-8000-00805f9b34fb
-handle = 0x0037, char properties = 0x02, char value handle = 0x0038, uuid = 00001a02-0000-1000-8000-00805f9b34fb
-handle = 0x003b, char properties = 0x02, char value handle = 0x003c, uuid = 00001a11-0000-1000-8000-00805f9b34fb
-handle = 0x003d, char properties = 0x1a, char value handle = 0x003e, uuid = 00001a10-0000-1000-8000-00805f9b34fb
-handle = 0x0040, char properties = 0x02, char value handle = 0x0041, uuid = 00001a12-0000-1000-8000-00805f9b34fb
-*/
 
 var (
 	modeBlinkLED           = []byte{0xfd, 0xff}
@@ -62,240 +36,121 @@ var (
 )
 
 type MiFlora struct {
-	logger log.Logger
-	wg     sync.WaitGroup
-	stopCh chan struct{}
+	logger  log.Logger
+	device  ble.Device
+	stopCh  chan struct{}
+	sensors map[string]*Sensor
 }
 
 type Sensor struct {
-	logger  log.Logger
-	device  *device.Device1
-	name    string
-	address string
+	logger        log.Logger
+	device        ble.Device
+	advertisement ble.Advertisement
+
+	name           string
+	historyPointer *uint16
 }
 
-type Measurement struct {
-	Temperature  float64
-	Moisture     byte
-	Light        uint16
-	Conductivity uint16
+func (s *Sensor) finished() bool {
+	if s.historyPointer == nil {
+		return false
+	}
+	return *s.historyPointer == 0
 }
 
-func (s *Measurement) UnmarshalBinary(data []byte) error {
-	// TT TT ?? LL LL ?? ?? MM CC CC ?? ?? ?? ?? ?? ??
-	if len(data) != 16 {
-		return fmt.Errorf("invalid data length: %d != 10", len(data))
-	}
-
-	p := bytes.NewBuffer(data)
-	var t int16
-
-	if err := binary.Read(p, binary.LittleEndian, &t); err != nil {
-		return fmt.Errorf("error reading data: %s", err)
-	}
-
-	p.Next(1)
-	if err := binary.Read(p, binary.LittleEndian, &s.Light); err != nil {
-		return fmt.Errorf("error reading data: %s", err)
-	}
-
-	p.Next(2)
-	if err := binary.Read(p, binary.LittleEndian, &s.Moisture); err != nil {
-		return fmt.Errorf("error reading data: %s", err)
-	}
-	if err := binary.Read(p, binary.LittleEndian, &s.Conductivity); err != nil {
-		return fmt.Errorf("error reading data: %s", err)
-	}
-
-	s.Temperature = float64(t) / 10
-	return nil
+type HistoricMeasurement struct {
+	model.Measurement
+	DeviceTime time.Time
 }
 
-type Firmware struct {
-	Version string
-	Battery uint8
+func (m *HistoricMeasurement) UnmarshalBinary(r io.Reader) error {
+	var t int32
+	if err := binary.Read(r, binary.LittleEndian, &t); err != nil {
+		return fmt.Errorf("error reading data: %w", err)
+	}
+	m.DeviceTime = time.Unix(int64(t), 0).UTC()
+	return m.Measurement.UnmarshalBinary(r)
 }
 
-// UnmarshalBinary implements encoding.BinaryUnmarshaler.
-func (f *Firmware) UnmarshalBinary(data []byte) error {
-	if len(data) < 3 {
-		return fmt.Errorf("data not long enough: %d < 3", len(data))
+func (s *Sensor) client(ctx context.Context) (*client, error) {
+	bleClient, err := s.device.Dial(ctx, s.advertisement.Addr())
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial: %w", err)
+	}
+	c := &client{
+		client: bleClient,
 	}
 
-	f.Battery = data[0]
-	f.Version = string(data[2:])
-	return nil
+	// this handles disconnected clients
+	go func() {
+		<-c.client.Disconnected()
+		_ = level.Debug(s.logger).Log("msg", "connection closed")
+	}()
+
+	p, err := c.client.DiscoverProfile(true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to discover profile: %w", err)
+	}
+	var services []string
+	for _, service := range p.Services {
+		services = append(services, service.UUID.String())
+	}
+	_ = level.Debug(s.logger).Log("msg", "discovered profile", "services", strings.Join(services, ", "))
+	c.profile = p
+
+	if err := c.client.Subscribe(
+		c.findCharacteristicByValueHandle(0x21),
+		false,
+		func(req []byte) {
+			_ = level.Debug(s.logger).Log("msg", "received notification 0x21", "data", string(req))
+		},
+	); err != nil {
+		_ = level.Warn(s.logger).Log("msg", "error subscribing to notification", "error", err)
+	}
+
+	return c, nil
 }
 
-func (s *Sensor) Start(stopCh chan struct{}) error {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-query:
-	for {
-		select {
-		case <-stopCh:
-			break query
-		case <-ticker.C:
-			if err := s.device.Connect(); err != nil {
-				s.logger.Log("msg", "connect failed", "err", err)
-				continue
-			}
-
-			_, err := s.History()
-			if err != nil {
-				s.logger.Log("msg", "getting history failed", "err", err)
-				continue
-			}
-
-			/*
-
-				f, err := s.Firmware()
-				if err != nil {
-					s.logger.Log("msg", "getting firmware failed", "err", err)
-					continue
-				}
-				s.logger.Log(
-					"msg", "firmware detected",
-					"version", f.Version,
-					"battery", f.Battery,
-				)
-
-				m, err := s.Measurement()
-				if err != nil {
-					s.logger.Log("msg", "getting measurement failed", "err", err)
-					continue
-				}
-				s.logger.Log(
-					"msg", "measurement successful",
-					"temperature", m.Temperature,
-					"light", m.Light,
-					"moisture", m.Moisture,
-					"conductivity", m.Conductivity,
-				)
-			*/
-
-			if err := s.device.Disconnect(); err != nil {
-				s.logger.Log("msg", "disconnect failed", "err", err)
-				continue
-			}
-
+func isDeclaredSensor(ctx context.Context, addr string) (bool, string) {
+	for _, nameOverride := range SensorsNamesFromContext(ctx) {
+		parts := strings.SplitN(nameOverride, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if strings.EqualFold(addr, parts[0]) {
+			return true, parts[1]
 		}
 	}
 
-	return nil
+	return false, ""
 }
 
-func (s *Sensor) Firmware() (*Firmware, error) {
-	charFirmware, err := s.device.GetCharByUUID(uuidFirmwareBattery)
-	if err != nil {
-		return nil, err
+func (m *MiFlora) newSensor(ctx context.Context, adv ble.Advertisement) *Sensor {
+	name := adv.LocalName()
+	addr := adv.Addr().String()
+
+	if declared, overrideName := isDeclaredSensor(ctx, addr); declared {
+		name = overrideName
 	}
 
-	dataFirmware, err := charFirmware.ReadValue(map[string]interface{}{})
-	if err != nil {
-		return nil, err
+	logger := log.With(m.logger, "address", adv.Addr().String())
+	if len(name) > 0 {
+		logger = log.With(logger, "name", name)
 	}
-
-	firmware := &Firmware{}
-	if err := firmware.UnmarshalBinary(dataFirmware); err != nil {
-		return nil, err
-	}
-
-	return firmware, nil
-}
-
-func (s *Sensor) History() (*string, error) {
-	charMode, err := s.device.GetCharByUUID(uuidHistoryControl)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := charMode.WriteValue(modeHistoryReadInit, map[string]interface{}{}); err != nil {
-		return nil, err
-	}
-
-	charData, err := s.device.GetCharByUUID(uuidHistoryRead)
-	if err != nil {
-		return nil, err
-	}
-
-	dataHistory, err := charData.ReadValue(map[string]interface{}{})
-	if err != nil {
-		return nil, err
-	}
-
-	var historyLength int16
-	if err := binary.Read(bytes.NewReader(dataHistory), binary.LittleEndian, &historyLength); err != nil {
-		return nil, fmt.Errorf("error reading history length: %s", err)
-	}
-	level.Info(s.logger).Log("msg", "read history header", "length", historyLength, "header", fmt.Sprintf("%x", dataHistory[2:]))
-
-	return nil, nil //fmt.Errorf("not implemented: %s", "history")
-}
-
-func (s *Sensor) Measurement() (*Measurement, error) {
-	charMode, err := s.device.GetCharByUUID(uuidModeChange)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := charMode.WriteValue(modeRealtimeReadInit, map[string]interface{}{}); err != nil {
-		return nil, err
-	}
-
-	charData, err := s.device.GetCharByUUID(uuidDataRead)
-	if err != nil {
-		return nil, err
-	}
-
-	dataMeasurement, err := charData.ReadValue(map[string]interface{}{})
-	if err != nil {
-		return nil, err
-	}
-
-	measurement := &Measurement{}
-	if err := measurement.UnmarshalBinary(dataMeasurement); err != nil {
-		return nil, err
-	}
-
-	return measurement, nil
-}
-
-func (m *MiFlora) newSensor(device *device.Device1) (*Sensor, error) {
-	name, err := device.GetName()
-	if err != nil {
-		return nil, err
-	}
-	address, err := device.GetAddress()
-	if err != nil {
-		return nil, err
-	}
-
 	return &Sensor{
-		logger:  log.With(m.logger, "address", address, "name", name),
-		name:    name,
-		address: address,
-		device:  device,
-	}, nil
+		logger:        logger,
+		device:        m.device,
+		advertisement: adv,
+		name:          name,
+	}
 }
 
-func (s *Sensor) isDevice() bool {
-	if s.name == deviceName {
-		return true
-	}
-
-	if strings.HasPrefix(strings.ToUpper(s.address), addressPrefix) {
-		return true
-	}
-
-	return false
-}
-
-func New() *MiFlora {
+func New(device ble.Device) *MiFlora {
 	return &MiFlora{
-		logger: log.NewNopLogger(),
-		stopCh: make(chan struct{}, 0),
+		logger:  log.NewNopLogger(),
+		device:  device,
+		sensors: make(map[string]*Sensor),
+		stopCh:  make(chan struct{}),
 	}
 }
 
@@ -309,90 +164,250 @@ const (
 	addressPrefix = "C4:7C:8D"
 )
 
-func (m *MiFlora) Scan(timeout time.Duration) error {
-	action := func(device *device.Device1) error {
-		s, err := m.newSensor(device)
-		if err != nil {
-			return err
-		}
-
-		if !s.isDevice() {
-			return nil
-		}
-
-		s.logger.Log("msg", "sensor found")
-		return nil
-	}
-
-	return m.doScan(timeout, action)
-
+func (m *MiFlora) Scan(ctx context.Context) error {
+	_, err := m.doScan(ctx)
+	return err
 }
 
-func (m *MiFlora) Realtime() error {
-	action := func(device *device.Device1) error {
-		s, err := m.newSensor(device)
-		if err != nil {
-			return err
-		}
+func (m *MiFlora) HistoricValues(ctx context.Context) error {
+	resultCh := ResultChannelFromContext(ctx)
 
-		if !s.isDevice() {
-			return nil
-		}
-
-		m.wg.Add(1)
-		go func() {
-			defer m.wg.Done()
-			err := s.Start(m.stopCh)
-			if err != nil {
-				s.logger.Log("msg", "query failed", "err", err)
-			}
-		}()
-		return nil
-	}
-
-	return m.doScan(time.Hour*24*365*100, action)
-}
-
-func (m *MiFlora) doScan(timeout time.Duration, action func(*device.Device1) error) error {
-	a, err := bluetooth.GetDefaultAdapter()
+	sensors, err := m.doScan(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get default adapter: %w", err)
+		return err
 	}
 
-	if err := a.StartDiscovery(); err != nil {
-		return fmt.Errorf("failed to set discovering: %w", err)
-	}
-
-	// list already discovered devices
-	devices, err := a.GetDevices()
-	if err != nil {
-		return fmt.Errorf("failed to set discovering: %w", err)
-	}
-	for _, device := range devices {
-		action(device)
-	}
-
-	// wait for later discovered devices
-	discoveredDevices, _, err := a.OnDeviceDiscovered()
-discovery:
 	for {
-		select {
-		case discoveredDevice := <-discoveredDevices:
-			if discoveredDevice.Type != adapter.DeviceAdded {
-				continue
-			}
+		var nextSensors []*Sensor
+		for _, s := range sensors {
+			if err := func(s *Sensor) error {
+				ctx, cancel := context.WithTimeout(ctx, time.Second*30)
+				defer cancel()
 
-			device, err := device.NewDevice1(discoveredDevice.Path)
-			if err != nil {
+				c, err := s.client(ctx)
+				if err != nil {
+					_ = level.Warn(s.logger).Log("msg", "error connecting to sensor", "error", err)
+					return nil
+				}
+				defer func() {
+					if err := c.client.CancelConnection(); err != nil {
+						_ = level.Warn(s.logger).Log("msg", "error canceling connection", "error", err)
+					}
+				}()
+
+				timeDiff, err := c.DeviceTimeDiff()
+				if err != nil {
+					_ = level.Warn(s.logger).Log("msg", "error reading device time", "error", err)
+					return nil
+				}
+
+				historyLength, err := c.HistoryLength()
+				if err != nil {
+					_ = level.Warn(s.logger).Log("msg", "error querying history length", "error", err)
+					return nil
+				}
+				_ = level.Debug(s.logger).Log("msg", "read length of history", "length", historyLength)
+
+				// restore pointer
+				if s.historyPointer != nil {
+					historyLength = *s.historyPointer - 1
+				}
+
+				for i := int32(historyLength); i >= 0; i-- {
+					pos := uint16(i)
+					hm, err := c.HistoryMeasurement(pos)
+					if err != nil {
+						_ = level.Warn(s.logger).Log("msg", "error querying history measurement", "position", i, "error", err)
+						return nil
+					}
+
+					timestamp := hm.DeviceTime.Add(timeDiff)
+					if resultCh != nil {
+						select {
+						case <-ctx.Done():
+							return ctx.Err()
+						case resultCh <- &model.Result{
+							Name:        s.name,
+							Address:     s.advertisement.Addr().String(),
+							Timestamp:   &timestamp,
+							Measurement: &hm.Measurement,
+						}:
+						}
+					}
+
+					// store the position
+					s.historyPointer = &pos
+
+					_ = hm.LogWith(level.Debug(s.logger)).Log(
+						"msg", "historic measurement successful",
+						"pos", pos,
+						"device_time", timestamp.Format(time.RFC3339),
+					)
+
+					// limit batch size at 50
+					if historyLength-pos > 50 {
+						return nil
+					}
+				}
+				return nil
+
+			}(s); err != nil {
 				return err
 			}
-
-			action(device)
-		case <-time.After(timeout):
-			break discovery
+			if !s.finished() {
+				nextSensors = append(nextSensors, s)
+			}
 		}
+		if len(nextSensors) == 0 {
+			break
+		}
+		sensors = nextSensors
+	}
+	return nil
+}
 
+func (m *MiFlora) Realtime(ctx context.Context) error {
+	resultCh := ResultChannelFromContext(ctx)
+
+	sensors, err := m.doScan(ctx)
+	if err != nil {
+		return err
 	}
 
+	for _, s := range sensors {
+		if err := func(s *Sensor) error {
+			ctx, cancel := context.WithTimeout(ctx, time.Second*30)
+			defer cancel()
+
+			c, err := s.client(ctx)
+			if err != nil {
+				_ = level.Warn(s.logger).Log("msg", "error connecting to sensor", "error", err)
+				return nil
+			}
+
+			f, err := c.Firmware()
+			if err != nil {
+				_ = level.Warn(s.logger).Log("msg", "error querying firmware", "error", err)
+				return nil
+			}
+			_ = level.Info(s.logger).Log("msg", "connected", "version", f.Version, "battery", f.Battery)
+
+			m, err := c.Measurement()
+			if err != nil {
+				_ = level.Warn(s.logger).Log("msg", "error querying measurement", "error", err)
+				return nil
+			}
+			if resultCh != nil {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case resultCh <- &model.Result{
+					Name:        s.name,
+					Address:     s.advertisement.Addr().String(),
+					Firmware:    f,
+					Measurement: m,
+				}:
+				}
+			}
+			_ = m.LogWith(level.Info(s.logger)).Log(
+				"msg", "measurement successful",
+			)
+
+			return nil
+		}(s); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func (m *MiFlora) doScan(ctx context.Context) ([]*Sensor, error) {
+	sensorsCh := make(chan *Sensor)
+
+	ctx, cancel := context.WithTimeout(ctx, ScanTimeoutFromContext(ctx))
+	defer cancel()
+
+	var sensors SensorSlice
+	expectedSensors := ExpectedSensorsFromContext(ctx)
+
+	declaredSensorNames := len(SensorsNamesFromContext(ctx))
+
+	if declaredSensorNames > 0 {
+		expectedSensors = int64(declaredSensorNames)
+	}
+	var expectedSensorsOnce sync.Once
+	go func() {
+		for s := range sensorsCh {
+			var existed bool
+			sensors, existed = sensors.insertSorted(s)
+			if !existed {
+				_ = level.Info(s.logger).Log("msg", "sensor found", "rssi", s.advertisement.RSSI())
+			}
+			if expectedSensors > 0 && int64(len(sensors)) >= expectedSensors {
+				expectedSensorsOnce.Do(func() {
+					_ = level.Info(m.logger).Log("msg", "all expected sensors found", "expected_sensors", expectedSensors)
+					cancel()
+				})
+			}
+		}
+	}()
+
+	handler := func(a ble.Advertisement) {
+		if !isMiraFloraDevice(a) {
+			return
+		}
+		if declaredSensorNames > 0 {
+			if ok, _ := isDeclaredSensor(ctx, a.Addr().String()); !ok {
+				return
+			}
+		}
+		sensorsCh <- m.newSensor(ctx, a)
+	}
+
+	// scan for devices
+	if err := m.device.Scan(ctx, false, handler); err != nil &&
+		!errors.Is(err, context.DeadlineExceeded) &&
+		!errors.Is(err, context.Canceled) {
+		return nil, fmt.Errorf("failed to scan for sensors: %w", err)
+	}
+	close(sensorsCh)
+
+	return sensors, nil
+}
+
+func isMiraFloraDevice(a ble.Advertisement) bool {
+	if !a.Connectable() {
+		return false
+	}
+
+	if a.LocalName() == deviceName {
+		return true
+	}
+
+	if strings.HasPrefix(strings.ToUpper(a.Addr().String()), addressPrefix) {
+		return true
+	}
+
+	return false
+}
+
+type SensorSlice []*Sensor
+
+func (s SensorSlice) insertSorted(e *Sensor) (SensorSlice, bool) {
+	v := func(s *Sensor) string {
+		return s.advertisement.Addr().String()
+	}
+	if len(s) == 0 {
+		return []*Sensor{e}, false
+	}
+	i := sort.Search(len(s), func(i int) bool { return v(s[i]) >= v(e) })
+
+	if len(s) > i && v(s[i]) == v(e) {
+		s[i] = e
+		return s, true
+	}
+	s = append(s, nil)
+	copy(s[i+1:], s[i:])
+	s[i] = e
+	return s, false
 }
