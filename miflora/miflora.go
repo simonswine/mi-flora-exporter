@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -14,8 +16,12 @@ import (
 	"github.com/go-ble/ble"
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/simonswine/mi-flora-remote-write/miflora/model"
+	"github.com/simonswine/mi-flora-exporter/miflora/advertisements"
+	"github.com/simonswine/mi-flora-exporter/miflora/model"
 )
 
 const (
@@ -27,6 +33,7 @@ const (
 	handleHistoryRead     = uint16(0x3c)
 )
 
+//nolint:deadcode,varcheck,unused // keep the unimplemented modes
 var (
 	modeBlinkLED           = []byte{0xfd, 0xff}
 	modeRealtimeReadInit   = []byte{0xa0, 0x1f}
@@ -266,6 +273,145 @@ func (m *MiFlora) HistoricValues(ctx context.Context) error {
 	return nil
 }
 
+type metrics struct {
+	temperature  *prometheus.GaugeVec
+	conductivity *prometheus.GaugeVec
+	brightness   *prometheus.GaugeVec
+	moisture     *prometheus.GaugeVec
+	rssi         *prometheus.HistogramVec
+
+	last_advertisement *prometheus.GaugeVec
+	// TODO last_connection / battery / info
+}
+
+func newMetrics() *metrics {
+	metricPrefix := "flowercare"
+	sensorLabels := []string{
+		"macaddress",
+		"name",
+	}
+	return &metrics{
+		temperature: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: metricPrefix,
+				Name:      "temperature_celsius",
+				Help:      "Ambient temperature in celsius.",
+			},
+			sensorLabels,
+		),
+		conductivity: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: metricPrefix,
+				Name:      "conductivity_sm",
+				Help:      "Soil conductivity in Siemens/meter.",
+			},
+			sensorLabels,
+		),
+		brightness: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: metricPrefix,
+				Name:      "brightness_lux",
+				Help:      "Ambient lighting in lux.",
+			},
+			sensorLabels,
+		),
+		moisture: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: metricPrefix,
+				Name:      "moisture_percent",
+				Help:      "Soil relative moisture in percent.",
+			},
+			sensorLabels,
+		),
+		rssi: promauto.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Namespace: metricPrefix,
+				Name:      "signal_strength_rssi",
+				Help:      "Signal strenght.",
+				Buckets:   prometheus.LinearBuckets(-120, 10, 12),
+			},
+			sensorLabels,
+		),
+		last_advertisement: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: metricPrefix,
+				Name:      "last_advertisement_timestamp",
+				Help:      "Contains the timestamp when the last advertisement from the sensor was received by the Bluetooth device.",
+			},
+			sensorLabels,
+		),
+	}
+}
+
+func (m *metrics) observeRSSI(v float64, labelValues ...string) {
+	m.rssi.WithLabelValues(labelValues...).Observe(v)
+	m.last_advertisement.WithLabelValues(labelValues...).SetToCurrentTime()
+}
+
+func (m *metrics) observeMeasurement(v *model.Measurement, labelValues ...string) {
+	if v.Temperature != nil {
+		m.temperature.WithLabelValues(labelValues...).Set(v.Temperature.Value())
+	}
+	if v.Conductivity != nil {
+		m.conductivity.WithLabelValues(labelValues...).Set(v.Conductivity.Value())
+	}
+	if v.Brightness != nil {
+		m.brightness.WithLabelValues(labelValues...).Set(float64(*v.Brightness))
+	}
+	if v.Moisture != nil {
+		m.moisture.WithLabelValues(labelValues...).Set(float64(*v.Moisture))
+	}
+}
+
+func (m *MiFlora) Exporter(ctx context.Context) error {
+	sensorsCh := make(chan *Sensor)
+
+	metrics := newMetrics()
+
+	go func() {
+		// Expose the registered metrics via HTTP.
+		http.Handle("/metrics", promhttp.HandlerFor(
+			prometheus.DefaultGatherer,
+			promhttp.HandlerOpts{
+				// Opt into OpenMetrics to support exemplars.
+				EnableOpenMetrics: true,
+			},
+		))
+		if err := http.ListenAndServe(":9294", nil); err != nil {
+			_ = level.Error(m.logger).Log("err", err)
+			os.Exit(1)
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		for s := range sensorsCh {
+			for _, serviceData := range s.advertisement.ServiceData() {
+				data, err := advertisements.New(serviceData.Data)
+				if err != nil {
+					_ = level.Error(s.logger).Log("err", err)
+					continue
+				}
+				measurement := data.Values()
+				rssi := s.advertisement.RSSI()
+				labelValues := []string{s.advertisement.Addr().String(), s.name}
+
+				metrics.observeMeasurement(measurement, labelValues...)
+				metrics.observeRSSI(float64(rssi), labelValues...)
+				_ = level.Info(measurement.LogWith(s.logger)).Log("msg", "sensor advertisement received", "rssi", rssi)
+			}
+		}
+	}()
+
+	if err := m.doScanReal(ctx, sensorsCh); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (m *MiFlora) Realtime(ctx context.Context) error {
 	resultCh := ResultChannelFromContext(ctx)
 
@@ -321,6 +467,32 @@ func (m *MiFlora) Realtime(ctx context.Context) error {
 	return nil
 }
 
+func (m *MiFlora) doScanReal(ctx context.Context, sensorsCh chan *Sensor) error {
+	declaredSensorNames := len(SensorsNamesFromContext(ctx))
+
+	handler := func(a ble.Advertisement) {
+		if !isMiraFloraDevice(a) {
+			return
+		}
+		if declaredSensorNames > 0 {
+			if ok, _ := isDeclaredSensor(ctx, a.Addr().String()); !ok {
+				return
+			}
+		}
+		sensorsCh <- m.newSensor(ctx, a)
+	}
+
+	// scan for devices
+	if err := m.device.Scan(ctx, true, handler); err != nil &&
+		!errors.Is(err, context.DeadlineExceeded) &&
+		!errors.Is(err, context.Canceled) {
+		return fmt.Errorf("failed to scan for sensors: %w", err)
+	}
+	close(sensorsCh)
+
+	return nil
+}
+
 func (m *MiFlora) doScan(ctx context.Context) ([]*Sensor, error) {
 	sensorsCh := make(chan *Sensor)
 
@@ -331,7 +503,6 @@ func (m *MiFlora) doScan(ctx context.Context) ([]*Sensor, error) {
 	expectedSensors := ExpectedSensorsFromContext(ctx)
 
 	declaredSensorNames := len(SensorsNamesFromContext(ctx))
-
 	if declaredSensorNames > 0 {
 		expectedSensors = int64(declaredSensorNames)
 	}
@@ -352,25 +523,9 @@ func (m *MiFlora) doScan(ctx context.Context) ([]*Sensor, error) {
 		}
 	}()
 
-	handler := func(a ble.Advertisement) {
-		if !isMiraFloraDevice(a) {
-			return
-		}
-		if declaredSensorNames > 0 {
-			if ok, _ := isDeclaredSensor(ctx, a.Addr().String()); !ok {
-				return
-			}
-		}
-		sensorsCh <- m.newSensor(ctx, a)
+	if err := m.doScanReal(ctx, sensorsCh); err != nil {
+		return nil, err
 	}
-
-	// scan for devices
-	if err := m.device.Scan(ctx, false, handler); err != nil &&
-		!errors.Is(err, context.DeadlineExceeded) &&
-		!errors.Is(err, context.Canceled) {
-		return nil, fmt.Errorf("failed to scan for sensors: %w", err)
-	}
-	close(sensorsCh)
 
 	return sensors, nil
 }

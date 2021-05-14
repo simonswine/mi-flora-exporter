@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/go-ble/ble"
-	"github.com/simonswine/mi-flora-remote-write/miflora/model"
+	"github.com/simonswine/mi-flora-exporter/miflora/model"
 )
 
 type client struct {

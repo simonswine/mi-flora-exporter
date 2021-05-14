@@ -9,46 +9,47 @@ import (
 	_ "net/http/pprof"
 	"os"
 
-	"github.com/go-ble/ble/examples/lib/dev"
+	"github.com/go-ble/ble/linux"
+	"github.com/go-ble/ble/linux/hci/cmd"
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
-	"github.com/urfave/cli"
+	"github.com/urfave/cli/v2"
 
-	"github.com/simonswine/mi-flora-remote-write/miflora"
-	"github.com/simonswine/mi-flora-remote-write/miflora/model"
-	"github.com/simonswine/mi-flora-remote-write/outputs/json"
-	"github.com/simonswine/mi-flora-remote-write/outputs/tsdb"
+	"github.com/simonswine/mi-flora-exporter/miflora"
+	"github.com/simonswine/mi-flora-exporter/miflora/model"
+	"github.com/simonswine/mi-flora-exporter/outputs/json"
+	"github.com/simonswine/mi-flora-exporter/outputs/tsdb"
 )
 
 var scanFlags = []cli.Flag{
-	cli.StringFlag{
+	&cli.StringFlag{
 		Name:  "adapter",
 		Value: "default",
 		Usage: "Bluetooth adapter to use.",
 	},
-	cli.DurationFlag{
+	&cli.DurationFlag{
 		Name:  "scan-timeout",
 		Value: miflora.ScanTimeoutFromContext(context.Background()),
 		Usage: "Timeout after which scanning for sensor devices is stopped.",
 	},
-	cli.Int64Flag{
+	&cli.Int64Flag{
 		Name:  "expected-sensors",
 		Value: miflora.ExpectedSensorsFromContext(context.Background()),
 		Usage: "If set to a value > 0 sensor scanning will stop after this number of sensors are detected.",
 	},
-	cli.StringSliceFlag{
+	&cli.StringSliceFlag{
 		Name:  "sensor-name",
 		Usage: "This flag can be used to define customized names for certain adapters. Can be repeated. (Example: 'c4:7c:8d:aa:bb:cc=my-bedroom-plant')",
 	},
 }
 
 var outputFlags = []cli.Flag{
-	cli.StringFlag{
+	&cli.StringFlag{
 		Name:  "output",
 		Value: "json",
 		Usage: "Output plugin to use (json|tsdb).",
 	},
-	cli.StringFlag{
+	&cli.StringFlag{
 		Name:  "tsdb.path",
 		Value: "./tsdb",
 		Usage: "Path to the TSDB database.",
@@ -84,9 +85,20 @@ func main() {
 
 	newMiraFlora := func(c *cli.Context) (context.Context, *miflora.MiFlora) {
 		device := c.String("adapter")
-		d, err := dev.NewDevice(device)
+		d, err := linux.NewDevice()
 		if err != nil {
-			level.Error(logger).Log("msg", fmt.Sprintf("failed to get %s device", device), "error", err)
+			_ = level.Error(logger).Log("msg", fmt.Sprintf("failed to get %s device", device), "error", err)
+			os.Exit(1)
+		}
+		// TODO: move to appropiate place
+		if err := d.HCI.Send(&cmd.LESetScanParameters{
+			LEScanType:           0x00,   // 0x00: passive
+			LEScanInterval:       0x4000, // 0x0004 - 0x4000; N * 0.625msec
+			LEScanWindow:         0x4000, // 0x0004 - 0x4000; N * 0.625msec
+			OwnAddressType:       0x00,   // 0x00: public
+			ScanningFilterPolicy: 0x00,   // 0x00: accept all
+		}, nil); err != nil {
+			_ = level.Error(logger).Log("msg", "failed to set scan parameters", "error", err)
 			os.Exit(1)
 		}
 		ctx := scanContext(c, context.Background())
@@ -133,13 +145,13 @@ func main() {
 
 		return ctx,
 			func() error {
-				close(resultCh)
+				//close(resultCh)
 				return <-errResult
 			}, nil
 	}
 
 	app := &cli.App{
-		Commands: []cli.Command{
+		Commands: []*cli.Command{
 			{
 				Name:    "scan",
 				Aliases: []string{"s"},
@@ -149,6 +161,20 @@ func main() {
 					_ = logger.Log("msg", "scanning for available bluetooth sensors")
 					ctx, m := newMiraFlora(c)
 					if err := m.Scan(ctx); err != nil {
+						return err
+					}
+					return nil
+				},
+			},
+			{
+				Name:    "exporter",
+				Aliases: []string{"e"},
+				Flags:   scanFlags,
+				Usage:   "run prometheus exporter",
+				Action: func(c *cli.Context) error {
+					_ = logger.Log("msg", "starting exporter")
+					ctx, m := newMiraFlora(c)
+					if err := m.Exporter(ctx); err != nil {
 						return err
 					}
 					return nil
@@ -199,7 +225,7 @@ func main() {
 	}
 
 	if err := app.Run(os.Args); err != nil {
-		level.Error(logger).Log("msg", err)
+		_ = level.Error(logger).Log("msg", err)
 		os.Exit(1)
 	}
 }

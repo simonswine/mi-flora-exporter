@@ -14,8 +14,8 @@ import (
 	"github.com/prometheus/prometheus/tsdb"
 	"github.com/prometheus/prometheus/tsdb/chunkenc"
 
-	"github.com/simonswine/mi-flora-remote-write/miflora/model"
-	promoutput "github.com/simonswine/mi-flora-remote-write/outputs/prometheus"
+	"github.com/simonswine/mi-flora-exporter/miflora/model"
+	promoutput "github.com/simonswine/mi-flora-exporter/outputs/prometheus"
 )
 
 type metric struct {
@@ -80,14 +80,14 @@ func resultToMetrics(r *model.Result) []*metric {
 				Set(labels.MetricName, metricNameLabel(prometheus.Opts(promoutput.MetricOptsBrightness))).
 				Labels(),
 			t: t,
-			v: float64(r.Measurement.Brightness),
+			v: float64(*r.Measurement.Brightness),
 		})
 		metrics = append(metrics, &metric{
 			l: labels.NewBuilder(defaultLabels).
 				Set(labels.MetricName, metricNameLabel(prometheus.Opts(promoutput.MetricOptsMoisture))).
 				Labels(),
 			t: t,
-			v: float64(r.Measurement.Moisture),
+			v: float64(*r.Measurement.Moisture),
 		})
 		metrics = append(metrics, &metric{
 			l: labels.NewBuilder(defaultLabels).
@@ -117,11 +117,9 @@ func (t *TSDB) Run(ctx context.Context, dir string) (chan *model.Result, chan er
 		nil,
 		t.logger,
 		nil,
-		time.Duration(time.Hour*24*365).Milliseconds(), // a year should be enough
-		dir,
-		nil,
-		tsdb.DefaultStripeSize,
-		nil,
+		&tsdb.HeadOptions{
+			ChunkRange: time.Duration(time.Hour * 24 * 365).Milliseconds(), // a year should be enough
+		},
 	)
 	if err != nil {
 		return nil, nil, err
@@ -140,7 +138,7 @@ func (t *TSDB) Run(ctx context.Context, dir string) (chan *model.Result, chan er
 		for result := range resultsCh {
 			a := head.Appender(ctx)
 			for _, m := range resultToMetrics(result) {
-				if _, err := a.Add(m.l, m.t, m.v); err != nil {
+				if _, err := a.Append(0, m.l, m.t, m.v); err != nil {
 					errCh <- err
 					break results
 				}

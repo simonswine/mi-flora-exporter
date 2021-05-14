@@ -37,7 +37,7 @@ func (f *Firmware) UnmarshalBinary(data []byte) error {
 type Temperature int16
 
 func (t Temperature) Value() float64 {
-	return float64(t) * 0.1
+	return float64(t) / 10
 }
 
 func (t Temperature) String() string {
@@ -51,7 +51,7 @@ func (t *Temperature) MarshalJSON() ([]byte, error) {
 type Conductivity uint16
 
 func (c Conductivity) Value() float64 {
-	return float64(c) * 0.0001
+	return float64(c) / 10000
 }
 
 func (c Conductivity) String() string {
@@ -63,25 +63,41 @@ func (c Conductivity) MarshalJSON() ([]byte, error) {
 }
 
 type Measurement struct {
-	Temperature  Temperature  `json:"temperature"`
-	Moisture     uint8        `json:"moisture"`
-	Brightness   uint16       `json:"brightness"`
-	Conductivity Conductivity `json:"conductivity"`
+	Temperature  *Temperature  `json:"temperature"`
+	Moisture     *uint8        `json:"moisture"`
+	Brightness   *uint16       `json:"brightness"`
+	Conductivity *Conductivity `json:"conductivity"`
 }
 
 func (m *Measurement) LogWith(l log.Logger) log.Logger {
-	return log.With(
-		l,
-		"temperature", m.Temperature,
-		"brightness", m.Brightness,
-		"moisture", m.Moisture,
-		"conductivity", m.Conductivity,
-	)
+	if m.Temperature != nil {
+		l = log.With(l, "temperature", m.Temperature)
+	}
+
+	if m.Brightness != nil {
+		l = log.With(l, "brightness", m.Brightness)
+	}
+
+	if m.Moisture != nil {
+		l = log.With(l, "moisture", m.Moisture)
+	}
+
+	if m.Conductivity != nil {
+		l = log.With(l, "conductivity", m.Conductivity)
+	}
+	return l
 }
 
 func (m *Measurement) UnmarshalBinary(r io.Reader) error {
+	var (
+		temperature  Temperature
+		moisture     uint8
+		brightness   uint16
+		conductivity Conductivity
+	)
+
 	// TT TT ?? LL LL ?? ?? MM CC CC ?? ?? ?? ?? ?? ??
-	if err := binary.Read(r, binary.LittleEndian, &m.Temperature); err != nil {
+	if err := binary.Read(r, binary.LittleEndian, &temperature); err != nil {
 		return fmt.Errorf("error reading data: %w", err)
 	}
 
@@ -90,7 +106,7 @@ func (m *Measurement) UnmarshalBinary(r io.Reader) error {
 		return fmt.Errorf("error skipping 1 byte: %w", err)
 	}
 
-	if err := binary.Read(r, binary.LittleEndian, &m.Brightness); err != nil {
+	if err := binary.Read(r, binary.LittleEndian, &brightness); err != nil {
 		return fmt.Errorf("error reading data: %w", err)
 	}
 
@@ -99,12 +115,18 @@ func (m *Measurement) UnmarshalBinary(r io.Reader) error {
 		return fmt.Errorf("error skipping 2 byte: %w", err)
 	}
 
-	if err := binary.Read(r, binary.LittleEndian, &m.Moisture); err != nil {
+	if err := binary.Read(r, binary.LittleEndian, &moisture); err != nil {
 		return fmt.Errorf("error reading data: %w", err)
 	}
 
-	if err := binary.Read(r, binary.LittleEndian, &m.Conductivity); err != nil {
+	if err := binary.Read(r, binary.LittleEndian, &conductivity); err != nil {
 		return fmt.Errorf("error reading data: %w", err)
 	}
+
+	m.Temperature = &temperature
+	m.Moisture = &moisture
+	m.Brightness = &brightness
+	m.Conductivity = &conductivity
+
 	return nil
 }

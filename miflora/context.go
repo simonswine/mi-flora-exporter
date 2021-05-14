@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/simonswine/mi-flora-remote-write/miflora/model"
+	"github.com/simonswine/mi-flora-exporter/miflora/model"
 )
 
 type contextKey int

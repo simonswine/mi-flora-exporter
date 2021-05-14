@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-kit/kit/log"
 
-	"github.com/simonswine/mi-flora-remote-write/miflora/model"
+	"github.com/simonswine/mi-flora-exporter/miflora/model"
 )
 
 type JSON struct {
