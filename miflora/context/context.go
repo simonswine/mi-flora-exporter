@@ -15,6 +15,7 @@ const (
 	contextExpectedSensors
 	contextSensorNames
 	contextResultChannel
+	contextBindAddress
 )
 
 func ContextWithScanTimeout(ctx context.Context, t time.Duration) context.Context {
@@ -90,4 +91,19 @@ func ResultChannelFromContext(ctx context.Context) chan *model.Result {
 		}
 	}
 	return nil
+}
+
+func ContextWithBindAddress(ctx context.Context, v string) context.Context {
+	return context.WithValue(ctx, contextBindAddress, v)
+}
+
+func BindAddressFromContext(ctx context.Context) string {
+	if ctx != nil {
+		if v := ctx.Value(contextBindAddress); v != nil {
+			if v, ok := v.(string); ok {
+				return v
+			}
+		}
+	}
+	return ":9294"
 }

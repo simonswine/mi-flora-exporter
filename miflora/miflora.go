@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -280,17 +281,41 @@ func (m *MiFlora) Exporter(ctx context.Context) error {
 	sensorsCh := make(chan *Sensor)
 
 	metrics := mprom.NewMetrics(prometheus.DefaultRegisterer)
+	metricsPath := "/metrics"
+
+	// Expose the registered metrics via HTTP.
+	mux := http.NewServeMux()
+	mux.Handle(metricsPath, promhttp.HandlerFor(
+		prometheus.DefaultGatherer,
+		promhttp.HandlerOpts{
+			// Opt into OpenMetrics to support exemplars.
+			EnableOpenMetrics: true,
+		},
+	))
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<html>
+			<head><title>Mi Flora Exporter</title></head>
+			<body>
+			<h1>Mi Flora Exporter</h1>
+			<p><a href="` + metricsPath + `">Metrics</a></p>
+			</body>
+			</html>`))
+	})
+
+	srv := &http.Server{
+		Addr:    mcontext.BindAddressFromContext(ctx),
+		Handler: mux,
+	}
+
+	ln, err := net.Listen("tcp", srv.Addr)
+	if err != nil {
+		return err
+	}
+	_ = level.Info(m.logger).Log("msg", "starting exporter", "address", ln.Addr())
 
 	go func() {
-		// Expose the registered metrics via HTTP.
-		http.Handle("/metrics", promhttp.HandlerFor(
-			prometheus.DefaultGatherer,
-			promhttp.HandlerOpts{
-				// Opt into OpenMetrics to support exemplars.
-				EnableOpenMetrics: true,
-			},
-		))
-		if err := http.ListenAndServe(":9294", nil); err != nil {
+		if err := srv.Serve(ln); err != nil {
 			_ = level.Error(m.logger).Log("err", err)
 			os.Exit(1)
 		}

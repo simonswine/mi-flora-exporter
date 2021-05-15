@@ -166,11 +166,16 @@ func main() {
 			{
 				Name:    "exporter",
 				Aliases: []string{"e"},
-				Flags:   scanFlags(true),
-				Usage:   "run prometheus exporter",
+				Flags: append(scanFlags(true), &cli.StringFlag{
+					Name:    "bind-address",
+					Aliases: []string{"addr"},
+					Value:   mcontext.BindAddressFromContext(context.Background()),
+					Usage:   "Listen address for exporter.",
+				}),
+				Usage: "run prometheus exporter",
 				Action: func(c *cli.Context) error {
-					_ = logger.Log("msg", "starting exporter")
 					ctx, m := newMiraFlora(c)
+					ctx = mcontext.ContextWithBindAddress(ctx, c.String("bind-address"))
 					if err := m.Exporter(ctx); err != nil {
 						return err
 					}
