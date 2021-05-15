@@ -10,7 +10,6 @@ import (
 	"os"
 
 	"github.com/go-ble/ble/linux"
-	"github.com/go-ble/ble/linux/hci/cmd"
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 	"github.com/urfave/cli/v2"
@@ -67,6 +66,7 @@ var outputFlags = []cli.Flag{
 func scanContext(c *cli.Context, ctx context.Context) context.Context {
 	ctx = mcontext.ContextWithExpectedSensors(ctx, c.Int64("expected-sensors"))
 	ctx = mcontext.ContextWithScanTimeout(ctx, c.Duration("scan-timeout"))
+	ctx = mcontext.ContextWithScanPassive(ctx, c.Bool("scan-passive"))
 	ctx = mcontext.ContextWithSensorNames(ctx, c.StringSlice("sensor-name"))
 	return ctx
 }
@@ -96,17 +96,6 @@ func main() {
 		d, err := linux.NewDevice()
 		if err != nil {
 			_ = level.Error(logger).Log("msg", fmt.Sprintf("failed to get %s device", device), "error", err)
-			os.Exit(1)
-		}
-		// TODO: move to appropiate place
-		if err := d.HCI.Send(&cmd.LESetScanParameters{
-			LEScanType:           0x00,   // 0x00: passive
-			LEScanInterval:       0x4000, // 0x0004 - 0x4000; N * 0.625msec
-			LEScanWindow:         0x4000, // 0x0004 - 0x4000; N * 0.625msec
-			OwnAddressType:       0x00,   // 0x00: public
-			ScanningFilterPolicy: 0x00,   // 0x00: accept all
-		}, nil); err != nil {
-			_ = level.Error(logger).Log("msg", "failed to set scan parameters", "error", err)
 			os.Exit(1)
 		}
 		ctx := scanContext(c, context.Background())

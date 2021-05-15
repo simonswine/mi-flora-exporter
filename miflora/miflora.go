@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/go-ble/ble"
+	"github.com/go-ble/ble/linux"
+	"github.com/go-ble/ble/linux/hci/cmd"
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
@@ -45,14 +47,14 @@ var (
 
 type MiFlora struct {
 	logger  log.Logger
-	device  ble.Device
+	device  *linux.Device
 	stopCh  chan struct{}
 	sensors map[string]*Sensor
 }
 
 type Sensor struct {
 	logger        log.Logger
-	device        ble.Device
+	device        *linux.Device
 	advertisement ble.Advertisement
 
 	name           string
@@ -153,7 +155,7 @@ func (m *MiFlora) newSensor(ctx context.Context, adv ble.Advertisement) *Sensor 
 	}
 }
 
-func New(device ble.Device) *MiFlora {
+func New(device *linux.Device) *MiFlora {
 	return &MiFlora{
 		logger:  log.NewNopLogger(),
 		device:  device,
@@ -481,6 +483,19 @@ func (m *MiFlora) doScanReal(ctx context.Context, sensorsCh chan *Sensor) error 
 			}
 		}
 		sensorsCh <- m.newSensor(ctx, a)
+	}
+
+	// set passive mode if required
+	if mcontext.ScanPassiveFromContext(ctx) {
+		if err := m.device.HCI.Send(&cmd.LESetScanParameters{
+			LEScanType:           0x00,   // 0x00: passive
+			LEScanInterval:       0x4000, // 0x0004 - 0x4000; N * 0.625msec
+			LEScanWindow:         0x4000, // 0x0004 - 0x4000; N * 0.625msec
+			OwnAddressType:       0x00,   // 0x00: public
+			ScanningFilterPolicy: 0x00,   // 0x00: accept all
+		}, nil); err != nil {
+			return err
+		}
 	}
 
 	// scan for devices
