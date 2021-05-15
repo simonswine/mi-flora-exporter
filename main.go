@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	stdlog "log"
-	"net/http"
-	_ "net/http/pprof"
 	"os"
 
 	"github.com/go-ble/ble/linux"
@@ -79,13 +77,6 @@ func filterContextErr(err error) error {
 }
 
 func main() {
-
-	go func() {
-		if err := http.ListenAndServe(":7070", nil); err != nil {
-			panic(err)
-		}
-	}()
-
 	var logger log.Logger
 	logger = log.NewLogfmtLogger(log.NewSyncWriter(os.Stderr))
 	logger = log.With(logger, "ts", log.DefaultTimestampUTC, "caller", log.DefaultCaller)
