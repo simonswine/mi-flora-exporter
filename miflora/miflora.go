@@ -125,8 +125,8 @@ func isDeclaredSensor(ctx context.Context, addr string) (bool, string) {
 		if len(parts) != 2 {
 			continue
 		}
-		if strings.EqualFold(addr, parts[0]) {
-			return true, parts[1]
+		if strings.EqualFold(addr, parts[1]) {
+			return true, parts[0]
 		}
 	}
 

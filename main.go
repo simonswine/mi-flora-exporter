@@ -46,7 +46,7 @@ func scanFlags(scanPassiveDefault bool) []cli.Flag {
 		},
 		&cli.StringSliceFlag{
 			Name:  "sensor-name",
-			Usage: "This flag can be used to define customized names for certain adapters. Can be repeated. (Example: 'c4:7c:8d:aa:bb:cc=my-bedroom-plant')",
+			Usage: "This flag can be used to define customized names for certain adapters. Can be repeated. (Example: 'my-bedroom-plant=c4:7c:8d:aa:bb:cc')",
 		},
 	}
 }
