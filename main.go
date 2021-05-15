@@ -16,31 +16,39 @@ import (
 	"github.com/urfave/cli/v2"
 
 	"github.com/simonswine/mi-flora-exporter/miflora"
+	mcontext "github.com/simonswine/mi-flora-exporter/miflora/context"
 	"github.com/simonswine/mi-flora-exporter/miflora/model"
 	"github.com/simonswine/mi-flora-exporter/outputs/json"
 	"github.com/simonswine/mi-flora-exporter/outputs/tsdb"
 )
 
-var scanFlags = []cli.Flag{
-	&cli.StringFlag{
-		Name:  "adapter",
-		Value: "default",
-		Usage: "Bluetooth adapter to use.",
-	},
-	&cli.DurationFlag{
-		Name:  "scan-timeout",
-		Value: miflora.ScanTimeoutFromContext(context.Background()),
-		Usage: "Timeout after which scanning for sensor devices is stopped.",
-	},
-	&cli.Int64Flag{
-		Name:  "expected-sensors",
-		Value: miflora.ExpectedSensorsFromContext(context.Background()),
-		Usage: "If set to a value > 0 sensor scanning will stop after this number of sensors are detected.",
-	},
-	&cli.StringSliceFlag{
-		Name:  "sensor-name",
-		Usage: "This flag can be used to define customized names for certain adapters. Can be repeated. (Example: 'c4:7c:8d:aa:bb:cc=my-bedroom-plant')",
-	},
+func scanFlags(scanPassiveDefault bool) []cli.Flag {
+	return []cli.Flag{
+		&cli.StringFlag{
+			Name:  "adapter",
+			Value: "default",
+			Usage: "Bluetooth adapter to use.",
+		},
+		&cli.DurationFlag{
+			Name:  "scan-timeout",
+			Value: mcontext.ScanTimeoutFromContext(context.Background()),
+			Usage: "Timeout after which scanning for sensor devices is stopped.",
+		},
+		&cli.BoolFlag{
+			Name:  "scan-passive",
+			Value: scanPassiveDefault,
+			Usage: "A passive scan is taking longer, but more energy efficient (and hence less battery draining for the sensors).",
+		},
+		&cli.Int64Flag{
+			Name:  "expected-sensors",
+			Value: mcontext.ExpectedSensorsFromContext(context.Background()),
+			Usage: "If set to a value > 0 sensor scanning will stop after this number of sensors are detected.",
+		},
+		&cli.StringSliceFlag{
+			Name:  "sensor-name",
+			Usage: "This flag can be used to define customized names for certain adapters. Can be repeated. (Example: 'c4:7c:8d:aa:bb:cc=my-bedroom-plant')",
+		},
+	}
 }
 
 var outputFlags = []cli.Flag{
@@ -57,9 +65,9 @@ var outputFlags = []cli.Flag{
 }
 
 func scanContext(c *cli.Context, ctx context.Context) context.Context {
-	ctx = miflora.ContextWithExpectedSensors(ctx, c.Int64("expected-sensors"))
-	ctx = miflora.ContextWithScanTimeout(ctx, c.Duration("scan-timeout"))
-	ctx = miflora.ContextWithSensorNames(ctx, c.StringSlice("sensor-name"))
+	ctx = mcontext.ContextWithExpectedSensors(ctx, c.Int64("expected-sensors"))
+	ctx = mcontext.ContextWithScanTimeout(ctx, c.Duration("scan-timeout"))
+	ctx = mcontext.ContextWithSensorNames(ctx, c.StringSlice("sensor-name"))
 	return ctx
 }
 
@@ -123,7 +131,7 @@ func main() {
 			return nil, nil, err
 		}
 
-		ctx = miflora.ContextWithResultChannel(ctx, resultCh)
+		ctx = mcontext.ContextWithResultChannel(ctx, resultCh)
 
 		ctx, cancel := context.WithCancel(ctx)
 
@@ -155,7 +163,7 @@ func main() {
 			{
 				Name:    "scan",
 				Aliases: []string{"s"},
-				Flags:   scanFlags,
+				Flags:   scanFlags(false),
 				Usage:   "scan for sensors reachable by bluetooth",
 				Action: func(c *cli.Context) error {
 					_ = logger.Log("msg", "scanning for available bluetooth sensors")
@@ -169,7 +177,7 @@ func main() {
 			{
 				Name:    "exporter",
 				Aliases: []string{"e"},
-				Flags:   scanFlags,
+				Flags:   scanFlags(true),
 				Usage:   "run prometheus exporter",
 				Action: func(c *cli.Context) error {
 					_ = logger.Log("msg", "starting exporter")
@@ -183,7 +191,7 @@ func main() {
 			{
 				Name:    "realtime",
 				Aliases: []string{"r"},
-				Flags:   append(scanFlags, outputFlags...),
+				Flags:   append(scanFlags(false), outputFlags...),
 				Usage:   "receive realtime values from sensors",
 				Action: func(c *cli.Context) error {
 					ctx, m := newMiraFlora(c)
@@ -204,7 +212,7 @@ func main() {
 			{
 				Name:    "history",
 				Aliases: []string{"H"},
-				Flags:   append(scanFlags, outputFlags...),
+				Flags:   append(scanFlags(false), outputFlags...),
 				Usage:   "receive historic values from sensors",
 				Action: func(c *cli.Context) error {
 					ctx, m := newMiraFlora(c)

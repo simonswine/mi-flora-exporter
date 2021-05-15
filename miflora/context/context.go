@@ -1,4 +1,4 @@
-package miflora
+package context
 
 import (
 	"context"
@@ -11,6 +11,7 @@ type contextKey int
 
 const (
 	contextScanTimeout contextKey = iota
+	contextScanPassive
 	contextExpectedSensors
 	contextSensorNames
 	contextResultChannel
@@ -29,6 +30,21 @@ func ScanTimeoutFromContext(ctx context.Context) time.Duration {
 		}
 	}
 	return 5 * time.Second
+}
+
+func ContextWithScanPassive(ctx context.Context, v bool) context.Context {
+	return context.WithValue(ctx, contextScanPassive, v)
+}
+
+func ScanPassiveFromContext(ctx context.Context) bool {
+	if ctx != nil {
+		if v := ctx.Value(contextScanPassive); v != nil {
+			if v, ok := v.(bool); ok {
+				return v
+			}
+		}
+	}
+	return false
 }
 
 func ContextWithExpectedSensors(ctx context.Context, n int64) context.Context {

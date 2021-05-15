@@ -21,6 +21,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/simonswine/mi-flora-exporter/miflora/advertisements"
+	mcontext "github.com/simonswine/mi-flora-exporter/miflora/context"
 	"github.com/simonswine/mi-flora-exporter/miflora/model"
 )
 
@@ -119,7 +120,7 @@ func (s *Sensor) client(ctx context.Context) (*client, error) {
 }
 
 func isDeclaredSensor(ctx context.Context, addr string) (bool, string) {
-	for _, nameOverride := range SensorsNamesFromContext(ctx) {
+	for _, nameOverride := range mcontext.SensorsNamesFromContext(ctx) {
 		parts := strings.SplitN(nameOverride, "=", 2)
 		if len(parts) != 2 {
 			continue
@@ -177,7 +178,7 @@ func (m *MiFlora) Scan(ctx context.Context) error {
 }
 
 func (m *MiFlora) HistoricValues(ctx context.Context) error {
-	resultCh := ResultChannelFromContext(ctx)
+	resultCh := mcontext.ResultChannelFromContext(ctx)
 
 	sensors, err := m.doScan(ctx)
 	if err != nil {
@@ -413,7 +414,7 @@ func (m *MiFlora) Exporter(ctx context.Context) error {
 }
 
 func (m *MiFlora) Realtime(ctx context.Context) error {
-	resultCh := ResultChannelFromContext(ctx)
+	resultCh := mcontext.ResultChannelFromContext(ctx)
 
 	sensors, err := m.doScan(ctx)
 	if err != nil {
@@ -468,7 +469,7 @@ func (m *MiFlora) Realtime(ctx context.Context) error {
 }
 
 func (m *MiFlora) doScanReal(ctx context.Context, sensorsCh chan *Sensor) error {
-	declaredSensorNames := len(SensorsNamesFromContext(ctx))
+	declaredSensorNames := len(mcontext.SensorsNamesFromContext(ctx))
 
 	handler := func(a ble.Advertisement) {
 		if !isMiraFloraDevice(a) {
@@ -496,13 +497,13 @@ func (m *MiFlora) doScanReal(ctx context.Context, sensorsCh chan *Sensor) error 
 func (m *MiFlora) doScan(ctx context.Context) ([]*Sensor, error) {
 	sensorsCh := make(chan *Sensor)
 
-	ctx, cancel := context.WithTimeout(ctx, ScanTimeoutFromContext(ctx))
+	ctx, cancel := context.WithTimeout(ctx, mcontext.ScanTimeoutFromContext(ctx))
 	defer cancel()
 
 	var sensors SensorSlice
-	expectedSensors := ExpectedSensorsFromContext(ctx)
+	expectedSensors := mcontext.ExpectedSensorsFromContext(ctx)
 
-	declaredSensorNames := len(SensorsNamesFromContext(ctx))
+	declaredSensorNames := len(mcontext.SensorsNamesFromContext(ctx))
 	if declaredSensorNames > 0 {
 		expectedSensors = int64(declaredSensorNames)
 	}
