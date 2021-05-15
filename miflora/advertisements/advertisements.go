@@ -78,7 +78,7 @@ func (x *XiaomiData) hasCapabilities() bool {
 	return (x.flags() & flagCapabilities) != 0
 }
 
-func (x *XiaomiData) hasMeasurement() bool {
+func (x *XiaomiData) HasMeasurement() bool {
 	return (x.flags() & flagMeasurment) != 0
 }
 
@@ -140,8 +140,8 @@ func (x *XiaomiData) valuesOffset() int {
 	return offset
 }
 
-func (x *XiaomiData) Values() *model.Measurement {
-	if !x.hasMeasurement() {
+func (x *XiaomiData) Measurement() *model.Measurement {
+	if !x.HasMeasurement() {
 		return nil
 	}
 	offset := x.valuesOffset()
@@ -169,7 +169,7 @@ func (x *XiaomiData) Values() *model.Measurement {
 		val := model.Conductivity(binary.LittleEndian.Uint16(data))
 		measurement.Conductivity = &val
 	default:
-		panic(fmt.Sprintf("unknown value: % x", id))
+		panic(fmt.Sprintf("unknown measurement: % x", id))
 	}
 
 	return &measurement

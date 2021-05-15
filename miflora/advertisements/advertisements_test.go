@@ -15,7 +15,7 @@ func verifyFloraNormal(t *testing.T, d *XiaomiData) {
 	assert.Equal(t, false, d.isEncrypted())
 	assert.Equal(t, true, d.hasMacAddress())
 	assert.Equal(t, true, d.hasCapabilities())
-	assert.Equal(t, true, d.hasMeasurement())
+	assert.Equal(t, true, d.HasMeasurement())
 	assert.Equal(t, false, d.isCustomData())
 	assert.Equal(t, false, d.isSubtitle())
 	assert.Equal(t, false, d.isBindingFrame())
@@ -88,9 +88,9 @@ func TestParse(t *testing.T) {
 			assert.Equal(t, tc.macAddress, d.MacAddress())
 			assert.Equal(t, byte(0x0d), d.Capabilities())
 			if tc.measurement != nil {
-				tc.measurement(t, d.Values())
+				tc.measurement(t, d.Measurement())
 			} else {
-				assert.Nil(t, d.Values())
+				assert.Nil(t, d.Measurement())
 			}
 		})
 	}

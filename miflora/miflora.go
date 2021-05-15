@@ -19,12 +19,12 @@ import (
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/simonswine/mi-flora-exporter/miflora/advertisements"
 	mcontext "github.com/simonswine/mi-flora-exporter/miflora/context"
 	"github.com/simonswine/mi-flora-exporter/miflora/model"
+	mprom "github.com/simonswine/mi-flora-exporter/outputs/prometheus"
 )
 
 const (
@@ -276,100 +276,10 @@ func (m *MiFlora) HistoricValues(ctx context.Context) error {
 	return nil
 }
 
-type metrics struct {
-	temperature  *prometheus.GaugeVec
-	conductivity *prometheus.GaugeVec
-	brightness   *prometheus.GaugeVec
-	moisture     *prometheus.GaugeVec
-	rssi         *prometheus.HistogramVec
-
-	last_advertisement *prometheus.GaugeVec
-	// TODO last_connection / battery / info
-}
-
-func newMetrics() *metrics {
-	metricPrefix := "flowercare"
-	sensorLabels := []string{
-		"macaddress",
-		"name",
-	}
-	return &metrics{
-		temperature: promauto.NewGaugeVec(
-			prometheus.GaugeOpts{
-				Namespace: metricPrefix,
-				Name:      "temperature_celsius",
-				Help:      "Ambient temperature in celsius.",
-			},
-			sensorLabels,
-		),
-		conductivity: promauto.NewGaugeVec(
-			prometheus.GaugeOpts{
-				Namespace: metricPrefix,
-				Name:      "conductivity_sm",
-				Help:      "Soil conductivity in Siemens/meter.",
-			},
-			sensorLabels,
-		),
-		brightness: promauto.NewGaugeVec(
-			prometheus.GaugeOpts{
-				Namespace: metricPrefix,
-				Name:      "brightness_lux",
-				Help:      "Ambient lighting in lux.",
-			},
-			sensorLabels,
-		),
-		moisture: promauto.NewGaugeVec(
-			prometheus.GaugeOpts{
-				Namespace: metricPrefix,
-				Name:      "moisture_percent",
-				Help:      "Soil relative moisture in percent.",
-			},
-			sensorLabels,
-		),
-		rssi: promauto.NewHistogramVec(
-			prometheus.HistogramOpts{
-				Namespace: metricPrefix,
-				Name:      "signal_strength_rssi",
-				Help:      "Signal strenght.",
-				Buckets:   prometheus.LinearBuckets(-120, 10, 12),
-			},
-			sensorLabels,
-		),
-		last_advertisement: promauto.NewGaugeVec(
-			prometheus.GaugeOpts{
-				Namespace: metricPrefix,
-				Name:      "last_advertisement_timestamp",
-				Help:      "Contains the timestamp when the last advertisement from the sensor was received by the Bluetooth device.",
-			},
-			sensorLabels,
-		),
-	}
-}
-
-func (m *metrics) observeRSSI(v float64, labelValues ...string) {
-	m.rssi.WithLabelValues(labelValues...).Observe(v)
-	m.last_advertisement.WithLabelValues(labelValues...).SetToCurrentTime()
-}
-
-func (m *metrics) observeMeasurement(v *model.Measurement, labelValues ...string) {
-	if v.Temperature != nil {
-		m.temperature.WithLabelValues(labelValues...).Set(v.Temperature.Value())
-	}
-	if v.Conductivity != nil {
-		m.conductivity.WithLabelValues(labelValues...).Set(v.Conductivity.Value())
-	}
-	if v.Brightness != nil {
-		m.brightness.WithLabelValues(labelValues...).Set(float64(*v.Brightness))
-	}
-	if v.Moisture != nil {
-		m.moisture.WithLabelValues(labelValues...).Set(float64(*v.Moisture))
-	}
-}
-
 func (m *MiFlora) Exporter(ctx context.Context) error {
 	sensorsCh := make(chan *Sensor)
 
-	metrics := newMetrics()
+	metrics := mprom.NewMetrics(prometheus.DefaultRegisterer)
 
 	go func() {
 		// Expose the registered metrics via HTTP.
@@ -397,12 +307,15 @@ func (m *MiFlora) Exporter(ctx context.Context) error {
 					_ = level.Error(s.logger).Log("err", err)
 					continue
 				}
-				measurement := data.Values()
+				if !data.HasMeasurement() {
+					continue
+				}
+				measurement := data.Measurement()
 				rssi := s.advertisement.RSSI()
 				labelValues := []string{s.advertisement.Addr().String(), s.name}
 
-				metrics.observeMeasurement(measurement, labelValues...)
-				metrics.observeRSSI(float64(rssi), labelValues...)
+				metrics.ObserveMeasurement(measurement, labelValues...)
+				metrics.ObserveRSSI(float64(rssi), labelValues...)
 				_ = level.Info(measurement.LogWith(s.logger)).Log("msg", "sensor advertisement received", "rssi", rssi)
 			}
 		}
