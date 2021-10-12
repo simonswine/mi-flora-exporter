@@ -87,10 +87,12 @@ func TestParse(t *testing.T) {
 			assert.Equal(t, uint16(0x0098), d.ProductID())
 			assert.Equal(t, tc.macAddress, d.MacAddress())
 			assert.Equal(t, byte(0x0d), d.Capabilities())
+			m, err := d.Measurement()
 			if tc.measurement != nil {
-				tc.measurement(t, d.Measurement())
+				assert.NoError(t, err)
+				tc.measurement(t, m)
 			} else {
-				assert.Nil(t, d.Measurement())
+				assert.Error(t, err)
 			}
 		})
 	}

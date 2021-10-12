@@ -140,12 +140,16 @@ func (x *XiaomiData) valuesOffset() int {
 	return offset
 }
 
-func (x *XiaomiData) Measurement() *model.Measurement {
+func (x *XiaomiData) Measurement() (*model.Measurement, error) {
 	if !x.HasMeasurement() {
-		return nil
+		return nil, errors.New("not a measurement")
 	}
 	offset := x.valuesOffset()
-	id := measurementIDs(binary.LittleEndian.Uint16(x.data[offset : offset+2]))
+	end := offset + 2
+	if len(x.data) < end {
+		return nil, fmt.Errorf("invalid measurement, length=%d exprect=%d: %v", len(x.data), end, x.data)
+	}
+	id := measurementIDs(binary.LittleEndian.Uint16(x.data[offset:end]))
 	offset += 2
 
 	length := x.data[offset]
@@ -169,8 +173,8 @@ func (x *XiaomiData) Measurement() *model.Measurement {
 		val := model.Conductivity(binary.LittleEndian.Uint16(data))
 		measurement.Conductivity = &val
 	default:
-		panic(fmt.Sprintf("unknown measurement: % x", id))
+		return nil, fmt.Errorf("unknown measurement: %x", id)
 	}
 
-	return &measurement
+	return &measurement, nil
 }
