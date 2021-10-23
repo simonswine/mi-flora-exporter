@@ -335,7 +335,11 @@ func (m *MiFlora) Exporter(ctx context.Context) error {
 				if !data.HasMeasurement() {
 					continue
 				}
-				measurement := data.Measurement()
+				measurement, err := data.Measurement()
+				if err != nil {
+					_ = level.Error(s.logger).Log("err", err)
+					continue
+				}
 				rssi := s.advertisement.RSSI()
 				labelValues := []string{s.advertisement.Addr().String(), s.name}
 
