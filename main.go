@@ -19,6 +19,8 @@ import (
 	"github.com/simonswine/mi-flora-exporter/outputs/tsdb"
 )
 
+var version = "unknown"
+
 func scanFlags(scanPassiveDefault bool) []cli.Flag {
 	return []cli.Flag{
 		&cli.StringFlag{
@@ -139,6 +141,7 @@ func main() {
 	}
 
 	app := &cli.App{
+		Version: version,
 		Commands: []*cli.Command{
 			{
 				Name:    "scan",
